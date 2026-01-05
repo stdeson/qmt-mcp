@@ -7,6 +7,10 @@
 import os
 from dataclasses import dataclass
 from typing import Dict, List
+from dotenv import load_dotenv
+
+# 加载 .env 文件
+load_dotenv()
 
 @dataclass
 class ServerConfig:

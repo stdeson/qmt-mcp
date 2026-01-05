@@ -1,4 +1,5 @@
 # QuantMCP 项目依赖
+python-dotenv>=1.0.0
 
 # FastMCP 2.0库
 fastmcp>=2.0.0
