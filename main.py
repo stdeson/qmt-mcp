@@ -7,6 +7,7 @@ QMT-MCP - 游资打板助手
 import logging
 import os
 from datetime import datetime, timedelta
+import time
 from typing import Optional, List, Dict, Any
 import pandas as pd
 from dotenv import load_dotenv
@@ -79,7 +80,7 @@ class XTQuantClient:
 
     def get_market_data(self, symbol: str, days: int = 30) -> Optional[pd.DataFrame]:
         """获取股票行情数据"""
-        if not self._connected:
+        if not self._connected or self._xt is None:
             logger.warning("XTQuant未连接")
             return None
 
@@ -88,6 +89,7 @@ class XTQuantClient:
             start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
 
             data = self._xt.get_market_data(
+                field_list=['open', 'high', 'low', 'close', 'volume'],
                 stock_list=[symbol],
                 period='1d',
                 start_time=start_date,
@@ -119,7 +121,7 @@ class XTQuantClient:
 
     def get_stock_list(self, sector: str = '沪深A股') -> List[str]:
         """获取股票列表"""
-        if not self._connected:
+        if not self._connected or self._xt is None:
             return []
         try:
             return self._xt.get_stock_list_in_sector(sector) or []
@@ -128,7 +130,7 @@ class XTQuantClient:
 
     def get_sector_data(self, sector: str, days: int = 5) -> Optional[Dict]:
         """批量获取板块数据"""
-        if not self._connected:
+        if not self._connected or self._xt is None:
             return None
 
         try:
@@ -140,6 +142,7 @@ class XTQuantClient:
             start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
 
             data = self._xt.get_market_data(
+                field_list=['open', 'high', 'low', 'close', 'volume'],
                 stock_list=stocks,
                 period='1d',
                 start_time=start_date,
@@ -182,8 +185,19 @@ class TradingTools:
             from xtquant.xttype import StockAccount
 
             self.trader = XtQuantTrader(config.QMT_PATH, config.SESSION_ID)
+            logger.info(f"账号ID: {config.ACCOUNT_ID}")
             self.account = StockAccount(config.ACCOUNT_ID)
-            logger.info("✓ 交易器初始化成功")
+            
+            # 启动交易器
+            self.trader.start()
+            logger.info("✓ 交易器启动成功")
+            
+            # 建立连接
+            connect_result = self.trader.connect()
+            if connect_result == 0:
+                logger.info("✓ 交易器连接成功")
+            else:
+                logger.warning(f"⚠️ 交易器连接失败，错误码: {connect_result}")
         except Exception as e:
             logger.warning(f"交易器初始化失败（将使用模拟模式）: {e}")
 
@@ -235,6 +249,60 @@ class TradingTools:
             return "✓ 撤单成功" if result == 0 else "❌ 撤单失败"
         except Exception as e:
             return f"❌ 撤单失败: {str(e)}"
+
+    def get_positions(self) -> str:
+        """
+        获取当前持仓信息
+        """
+        try:
+            if not self.trader:
+                return "⚠️ 模拟模式下无法获取真实持仓信息"
+
+            # 获取实盘持仓
+            t1 = time.time()
+            logger.info(f'开始查询持仓...')
+            positions = self.trader.query_stock_positions(self.account)
+            logger.info(f'查询持仓耗时: {time.time() - t1:.4f}秒')
+            if not positions:
+                return "📊 暂无持仓"
+
+            # 格式化输出持仓信息
+            result = "📊 当前持仓\n"
+            result += "=" * 50 + "\n"
+            result += f"{'股票代码':<12} {'股票名称':<12} {'持仓数量':<10} {'成本价':<10} {'当前价':<10} {'盈亏':<10}\n"
+            result += "-" * 50 + "\n"
+
+            total_profit = 0.0
+            logger.info(f'持仓数量: {len(positions)}')
+
+            for pos in positions:
+                try:
+                    symbol = pos.stock_code
+                    name = getattr(pos, 'instrument_name', '--')
+                    quantity = getattr(pos, 'volume', getattr(pos, 'total_amount', 0))
+                    cost_price = getattr(pos, 'avg_price', getattr(pos, 'cost_price', 0.0))
+                    current_price = getattr(pos, 'last_price', 0.0)
+                    logger.info(f'股票代码: {symbol}, 股票名称: {name}, 持仓数量: {quantity}, 成本价: {cost_price}, 当前价: {current_price}')
+                    
+                    # 计算盈亏
+                    profit = (current_price - cost_price) * quantity
+                    total_profit += profit
+                    
+                    # 格式化输出
+                    result += f"{symbol:<12} {name:<12} {quantity:<10,} {cost_price:<10.2f} {current_price:<10.2f} {profit:<10.2f}\n"
+                except Exception as e:
+                    logger.error(f"处理持仓数据失败: {e}")
+                    continue
+
+            result += "-" * 50 + "\n"
+            result += f"{'总盈亏':<46} {total_profit:<10.2f}\n"
+            result += "=" * 50
+
+            return result
+
+        except Exception as e:
+            logger.error(f"获取持仓信息失败: {e}")
+            return f"❌ 获取持仓信息失败: {str(e)}"
 
 trading_tools = TradingTools()
 
@@ -497,6 +565,14 @@ def get_dragon_tiger_info(symbol: str) -> str:
     """
     logger.info(f"龙虎榜分析: {symbol}")
     return analyzer.get_dragon_tiger_info(symbol)
+
+@mcp.tool()
+def get_positions() -> str:
+    """
+    获取当前持仓信息
+    """
+    logger.info("查询当前持仓信息")
+    return trading_tools.get_positions()
 
 # ====================== 主程序 ======================
 
